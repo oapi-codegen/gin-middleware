@@ -30,11 +30,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	GinContextKey = "oapi-codegen/gin-context"
-	UserDataKey   = "oapi-codegen/user-data"
-)
-
 // OapiValidatorFromYamlFile creates a validator middleware from a YAML file path
 func OapiValidatorFromYamlFile(path string) (gin.HandlerFunc, error) {
 	data, err := os.ReadFile(path)
@@ -55,24 +50,6 @@ func OapiValidatorFromYamlFile(path string) (gin.HandlerFunc, error) {
 // OAPI validation fails on the request, we return an HTTP/400 with error message
 func OapiRequestValidator(swagger *openapi3.T) gin.HandlerFunc {
 	return OapiRequestValidatorWithOptions(swagger, nil)
-}
-
-// ErrorHandler is called when there is an error in validation
-type ErrorHandler func(c *gin.Context, message string, statusCode int)
-
-// MultiErrorHandler is called when oapi returns a MultiError type
-type MultiErrorHandler func(openapi3.MultiError) error
-
-// Options to customize request validation. These are passed through to
-// openapi3filter.
-type Options struct {
-	ErrorHandler      ErrorHandler
-	Options           openapi3filter.Options
-	ParamDecoder      openapi3filter.ContentParameterDecoder
-	UserData          interface{}
-	MultiErrorHandler MultiErrorHandler
-	// SilenceServersWarning allows silencing a warning for https://github.com/deepmap/oapi-codegen/issues/882 that reports when an OpenAPI spec has `spec.Servers != nil`
-	SilenceServersWarning bool
 }
 
 // OapiRequestValidatorWithOptions creates a validator from a swagger object, with validation options
@@ -137,12 +114,12 @@ func ValidateRequestFromContext(c *gin.Context, router routers.Router, options *
 
 	// Pass the gin context into the request validator, so that any callbacks
 	// which it invokes make it available.
-	requestContext := context.WithValue(context.Background(), GinContextKey, c) //nolint:staticcheck
+	requestContext := context.WithValue(context.Background(), GinContextKey, c)
 
 	if options != nil {
 		validationInput.Options = &options.Options
 		validationInput.ParamDecoder = options.ParamDecoder
-		requestContext = context.WithValue(requestContext, UserDataKey, options.UserData) //nolint:staticcheck
+		requestContext = context.WithValue(requestContext, UserDataKey, options.UserData)
 	}
 
 	err = openapi3filter.ValidateRequest(requestContext, validationInput)
@@ -169,43 +146,4 @@ func ValidateRequestFromContext(c *gin.Context, router routers.Router, options *
 		}
 	}
 	return nil
-}
-
-// GetGinContext gets the echo context from within requests. It returns
-// nil if not found or wrong type.
-func GetGinContext(c context.Context) *gin.Context {
-	iface := c.Value(GinContextKey)
-	if iface == nil {
-		return nil
-	}
-	ginCtx, ok := iface.(*gin.Context)
-	if !ok {
-		return nil
-	}
-	return ginCtx
-}
-
-func GetUserData(c context.Context) interface{} {
-	return c.Value(UserDataKey)
-}
-
-// attempt to get the MultiErrorHandler from the options. If it is not set,
-// return a default handler
-func getMultiErrorHandlerFromOptions(options *Options) MultiErrorHandler {
-	if options == nil {
-		return defaultMultiErrorHandler
-	}
-
-	if options.MultiErrorHandler == nil {
-		return defaultMultiErrorHandler
-	}
-
-	return options.MultiErrorHandler
-}
-
-// defaultMultiErrorHandler returns a StatusBadRequest (400) and a list
-// of all of the errors. This method is called if there are no other
-// methods defined on the options.
-func defaultMultiErrorHandler(me openapi3.MultiError) error {
-	return fmt.Errorf("multiple errors encountered: %s", me)
 }
