@@ -15,16 +15,12 @@
 package ginmiddleware
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -34,57 +30,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-//go:embed test_spec.yaml
-var testSchema []byte
-
-func doGet(t *testing.T, handler http.Handler, rawURL string) *httptest.ResponseRecorder {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		t.Fatalf("Invalid url: %s", rawURL)
-	}
-
-	r, err := http.NewRequest(http.MethodGet, u.String(), nil)
-	if err != nil {
-		t.Fatalf("Could not construct a request: %s", rawURL)
-	}
-	r.Header.Set("accept", "application/json")
-	r.Header.Set("host", u.Host)
-
-	tt := httptest.NewRecorder()
-
-	handler.ServeHTTP(tt, r)
-
-	return tt
-}
-
-func doPost(t *testing.T, handler http.Handler, rawURL string, jsonBody interface{}) *httptest.ResponseRecorder {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		t.Fatalf("Invalid url: %s", rawURL)
-	}
-
-	body, err := json.Marshal(jsonBody)
-	if err != nil {
-		t.Fatalf("Could not marshal request body: %v", err)
-	}
-
-	r, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("Could not construct a request for URL %s: %v", rawURL, err)
-	}
-	r.Header.Set("accept", "application/json")
-	r.Header.Set("content-type", "application/json")
-	r.Header.Set("host", u.Host)
-
-	tt := httptest.NewRecorder()
-
-	handler.ServeHTTP(tt, r)
-
-	return tt
-}
+//go:embed test_request_spec.yaml
+var testRequestSchema []byte
 
 func TestOapiRequestValidator(t *testing.T) {
-	swagger, err := openapi3.NewLoader().LoadFromData(testSchema)
+	swagger, err := openapi3.NewLoader().LoadFromData(testRequestSchema)
 	require.NoError(t, err, "Error initializing swagger")
 
 	// Create a new echo router
@@ -232,7 +182,7 @@ func TestOapiRequestValidator(t *testing.T) {
 }
 
 func TestOapiRequestValidatorWithOptionsMultiError(t *testing.T) {
-	swagger, err := openapi3.NewLoader().LoadFromData(testSchema)
+	swagger, err := openapi3.NewLoader().LoadFromData(testRequestSchema)
 	require.NoError(t, err, "Error initializing swagger")
 
 	g := gin.New()
@@ -335,7 +285,7 @@ func TestOapiRequestValidatorWithOptionsMultiError(t *testing.T) {
 }
 
 func TestOapiRequestValidatorWithOptionsMultiErrorAndCustomHandler(t *testing.T) {
-	swagger, err := openapi3.NewLoader().LoadFromData(testSchema)
+	swagger, err := openapi3.NewLoader().LoadFromData(testRequestSchema)
 	require.NoError(t, err, "Error initializing swagger")
 
 	g := gin.New()
