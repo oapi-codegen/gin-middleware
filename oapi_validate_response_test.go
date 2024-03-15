@@ -35,11 +35,9 @@ func TestOapiResponseValidator(t *testing.T) {
 	swagger, err := openapi3.NewLoader().LoadFromData(testResponseSchema)
 	require.NoError(t, err, "Error initializing swagger")
 
-	// Create a new echo router
+	// Create a new gin router
 	g := gin.New()
 
-	// Set up an authenticator to check authenticated function. It will allow
-	// access to "someScope", but disallow others.
 	options := Options{
 		ErrorHandler: func(c *gin.Context, message string, statusCode int) {
 			c.String(statusCode, "test: "+message)
@@ -51,17 +49,21 @@ func TestOapiResponseValidator(t *testing.T) {
 		UserData: "hi!",
 	}
 
-	// Install our OpenApi based request validator
+	// Install our OpenApi based response validator
 	g.Use(OapiResponseValidatorWithOptions(swagger, &options))
 
-	tests := []struct {
-		name        string
-		operationID string
-	}{
-		{
-			name:        "GET /resource",
-			operationID: "getResource",
-		},
+	// Test an incorrect route
+	{
+		rec := doGet(t, g, "http://deepmap.ai/incorrect")
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Contains(t, rec.Body.String(), "no matching operation was found")
+	}
+
+	// Test wrong server
+	{
+		rec := doGet(t, g, "http://wrongserver.ai/resource")
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Contains(t, rec.Body.String(), "no matching operation was found")
 	}
 
 	// getResource
@@ -235,7 +237,7 @@ func TestOapiResponseValidator(t *testing.T) {
 
 				rec := doPost(t, g, "http://deepmap.ai/resource", gin.H{"name": "Wilhelm Scream"})
 				assert.Equal(t, tt.wantStatus, rec.Code)
-				if tt.wantStatus == http.StatusOK {
+				if tt.wantStatus == http.StatusCreated {
 					switch tt.contentType {
 					case "application/json":
 						assert.JSONEq(t, tt.wantRsp, rec.Body.String())
@@ -249,6 +251,20 @@ func TestOapiResponseValidator(t *testing.T) {
 		}
 	}
 
+	tests := []struct {
+		name        string
+		operationID string
+	}{
+		{
+			name:        "GET /resource",
+			operationID: "getResource",
+		},
+		{
+			name:        "POST /resource",
+			operationID: "createResource",
+		},
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			switch tt.operationID {
@@ -259,5 +275,35 @@ func TestOapiResponseValidator(t *testing.T) {
 			}
 		})
 	}
+}
 
+func TestOapiResponseValidatorNoOptions(t *testing.T) {
+	swagger, err := openapi3.NewLoader().LoadFromData(testResponseSchema)
+	require.NoError(t, err, "Error initializing swagger")
+
+	mw := OapiResponseValidator(swagger)
+	assert.NotNil(t, mw, "Response validator is nil")
+}
+
+func TestOapiResponseValidatorFromYamlFile(t *testing.T) {
+	// Test that we can load a response validator from a yaml file
+	{
+		mw, err := OapiResponseValidatorFromYamlFile("test_response_spec.yaml")
+		assert.NoError(t, err, "Error initializing response validator")
+		assert.NotNil(t, mw, "Response validator is nil")
+	}
+
+	// Test that we get an error when the file does not exist
+	{
+		mw, err := OapiResponseValidatorFromYamlFile("nonexistent.yaml")
+		assert.Error(t, err, "Expected error initializing response validator")
+		assert.Nil(t, mw, "Response validator is not nil")
+	}
+
+	// Test that we get an error when the file is not a valid yaml file
+	{
+		mw, err := OapiResponseValidatorFromYamlFile("README.md")
+		assert.Error(t, err, "Expected error initializing response validator")
+		assert.Nil(t, mw, "Response validator is not nil")
+	}
 }

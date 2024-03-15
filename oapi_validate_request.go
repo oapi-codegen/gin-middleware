@@ -15,7 +15,6 @@
 package ginmiddleware
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -65,22 +64,7 @@ func OapiRequestValidatorWithOptions(swagger *openapi3.T, options *Options) gin.
 	return func(c *gin.Context) {
 		err := ValidateRequestFromContext(c, router, options)
 		if err != nil {
-			// using errors.Is did not work
-			if options != nil && options.ErrorHandler != nil && err.Error() == routers.ErrPathNotFound.Error() {
-				options.ErrorHandler(c, err.Error(), http.StatusNotFound)
-				// in case the handler didn't internally call Abort, stop the chain
-				c.Abort()
-			} else if options != nil && options.ErrorHandler != nil {
-				options.ErrorHandler(c, err.Error(), http.StatusBadRequest)
-				// in case the handler didn't internally call Abort, stop the chain
-				c.Abort()
-			} else if err.Error() == routers.ErrPathNotFound.Error() {
-				// note: i am not sure if this is the best way to handle this
-				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			} else {
-				// note: i am not sure if this is the best way to handle this
-				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			}
+			handleValidationError(c, err, options, http.StatusBadRequest)
 		}
 		c.Next()
 	}
@@ -89,38 +73,14 @@ func OapiRequestValidatorWithOptions(swagger *openapi3.T, options *Options) gin.
 // ValidateRequestFromContext is called from the middleware above and actually does the work
 // of validating a request.
 func ValidateRequestFromContext(c *gin.Context, router routers.Router, options *Options) error {
-	req := c.Request
-	route, pathParams, err := router.FindRoute(req)
-
-	// We failed to find a matching route for the request.
+	validationInput, err := getRequestValidationInput(c.Request, router, options)
 	if err != nil {
-		switch e := err.(type) {
-		case *routers.RouteError:
-			// We've got a bad request, the path requested doesn't match
-			// either server, or path, or something.
-			return errors.New(e.Reason)
-		default:
-			// This should never happen today, but if our upstream code changes,
-			// we don't want to crash the server, so handle the unexpected error.
-			return fmt.Errorf("error validating route: %s", err.Error())
-		}
+		return fmt.Errorf("error getting request validation input from route: %w", err)
 	}
 
-	validationInput := &openapi3filter.RequestValidationInput{
-		Request:    req,
-		PathParams: pathParams,
-		Route:      route,
-	}
-
-	// Pass the gin context into the request validator, so that any callbacks
+	// Pass the gin context into the response validator, so that any callbacks
 	// which it invokes make it available.
-	requestContext := context.WithValue(context.Background(), GinContextKey, c)
-
-	if options != nil {
-		validationInput.Options = &options.Options
-		validationInput.ParamDecoder = options.ParamDecoder
-		requestContext = context.WithValue(requestContext, UserDataKey, options.UserData)
-	}
+	requestContext := getRequestContext(c, options)
 
 	err = openapi3filter.ValidateRequest(requestContext, validationInput)
 	if err != nil {

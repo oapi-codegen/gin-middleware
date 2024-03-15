@@ -16,7 +16,6 @@ package ginmiddleware
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -47,9 +46,9 @@ func OapiResponseValidatorFromYamlFile(path string) (gin.HandlerFunc, error) {
 	return OapiRequestValidator(swagger), nil
 }
 
-// OapiRequestValidator is an gin middleware function which validates incoming HTTP requests
+// OapiResponseValidator is an gin middleware function which validates outgoing HTTP responses
 // to make sure that they conform to the given OAPI 3.0 specification. When
-// OAPI validation fails on the request, we return an HTTP/400 with error message
+// OAPI validation fails on the request, we return an HTTP/500 with error message
 func OapiResponseValidator(swagger *openapi3.T) gin.HandlerFunc {
 	return OapiResponseValidatorWithOptions(swagger, nil)
 }
@@ -67,64 +66,28 @@ func OapiResponseValidatorWithOptions(swagger *openapi3.T, options *Options) gin
 	return func(c *gin.Context) {
 		err := ValidateResponseFromContext(c, router, options)
 		if err != nil {
-			if options != nil && options.ErrorHandler != nil {
-				options.ErrorHandler(c, err.Error(), http.StatusInternalServerError)
-				// in case the handler didn't internally call Abort, stop the chain
-				c.Abort()
-			} else {
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			}
+			handleValidationError(c, err, options, http.StatusInternalServerError)
 		}
+
+		// in case an error was encountered before Next() was called, call it here
+		c.Next()
 	}
-}
-
-type responseInterceptor struct {
-	gin.ResponseWriter
-	body *bytes.Buffer
-}
-
-func (w *responseInterceptor) Write(b []byte) (int, error) {
-	return w.body.Write(b)
 }
 
 // ValidateResponseFromContext is called from the middleware above and actually does the work
 // of validating a response.
 func ValidateResponseFromContext(c *gin.Context, router routers.Router, options *Options) error {
-	req := c.Request
-	route, pathParams, err := router.FindRoute(req)
-
-	// We failed to find a matching route for the request.
+	reqValidationInput, err := getRequestValidationInput(c.Request, router, options)
 	if err != nil {
-		switch e := err.(type) {
-		case *routers.RouteError:
-			// We've got a bad request, the path requested doesn't match
-			// either server, or path, or something.
-			return errors.New(e.Reason)
-		default:
-			// This should never happen today, but if our upstream code changes,
-			// we don't want to crash the server, so handle the unexpected error.
-			return fmt.Errorf("error validating route: %s", err.Error())
-		}
+		return fmt.Errorf("error getting request validation input from route: %w", err)
 	}
 
-	reqValidationInput := &openapi3filter.RequestValidationInput{
-		Request:    req,
-		PathParams: pathParams,
-		Route:      route,
-	}
-
-	// Pass the gin context into the request validator, so that any callbacks
+	// Pass the gin context into the response validator, so that any callbacks
 	// which it invokes make it available.
-	requestContext := context.WithValue(context.Background(), GinContextKey, c)
-
-	if options != nil {
-		reqValidationInput.Options = &options.Options
-		reqValidationInput.ParamDecoder = options.ParamDecoder
-		requestContext = context.WithValue(requestContext, UserDataKey, options.UserData)
-	}
+	requestContext := getRequestContext(c, options)
 
 	// wrap the response writer in a bodyWriter so we can capture the response body
-	bw := &responseInterceptor{ResponseWriter: c.Writer, body: bytes.NewBufferString("")}
+	bw := newResponseInterceptor(c.Writer)
 	c.Writer = bw
 
 	// Call the next handler in the chain, which will actually process the request
@@ -146,7 +109,6 @@ func ValidateResponseFromContext(c *gin.Context, router routers.Router, options 
 	}
 
 	err = openapi3filter.ValidateResponse(requestContext, rspValidationInput)
-
 	if err != nil {
 		// restore the original response writer
 		c.Writer = bw.ResponseWriter
@@ -164,8 +126,6 @@ func ValidateResponseFromContext(c *gin.Context, router routers.Router, options 
 			// openapi errors seem to be multi-line with a decent message on the first
 			errorLines := strings.Split(e.Error(), "\n")
 			return fmt.Errorf("error in openapi3filter.ResponseError: %s", errorLines[0])
-		case *openapi3filter.SecurityRequirementsError:
-			return fmt.Errorf("error in openapi3filter.SecurityRequirementsError: %s", e.Error())
 		default:
 			// This should never happen today, but if our upstream code changes,
 			// we don't want to crash the server, so handle the unexpected error.
