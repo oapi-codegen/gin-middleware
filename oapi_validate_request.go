@@ -15,7 +15,6 @@
 package ginmiddleware
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -28,11 +27,6 @@ import (
 	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/gorillamux"
 	"github.com/gin-gonic/gin"
-)
-
-const (
-	GinContextKey = "oapi-codegen/gin-context"
-	UserDataKey   = "oapi-codegen/user-data"
 )
 
 // OapiValidatorFromYamlFile creates a validator middleware from a YAML file path
@@ -57,24 +51,6 @@ func OapiRequestValidator(swagger *openapi3.T) gin.HandlerFunc {
 	return OapiRequestValidatorWithOptions(swagger, nil)
 }
 
-// ErrorHandler is called when there is an error in validation
-type ErrorHandler func(c *gin.Context, message string, statusCode int)
-
-// MultiErrorHandler is called when oapi returns a MultiError type
-type MultiErrorHandler func(openapi3.MultiError) error
-
-// Options to customize request validation. These are passed through to
-// openapi3filter.
-type Options struct {
-	ErrorHandler      ErrorHandler
-	Options           openapi3filter.Options
-	ParamDecoder      openapi3filter.ContentParameterDecoder
-	UserData          interface{}
-	MultiErrorHandler MultiErrorHandler
-	// SilenceServersWarning allows silencing a warning for https://github.com/deepmap/oapi-codegen/issues/882 that reports when an OpenAPI spec has `spec.Servers != nil`
-	SilenceServersWarning bool
-}
-
 // OapiRequestValidatorWithOptions creates a validator from a swagger object, with validation options
 func OapiRequestValidatorWithOptions(swagger *openapi3.T, options *Options) gin.HandlerFunc {
 	if swagger.Servers != nil && (options == nil || !options.SilenceServersWarning) {
@@ -88,22 +64,7 @@ func OapiRequestValidatorWithOptions(swagger *openapi3.T, options *Options) gin.
 	return func(c *gin.Context) {
 		err := ValidateRequestFromContext(c, router, options)
 		if err != nil {
-			// using errors.Is did not work
-			if options != nil && options.ErrorHandler != nil && err.Error() == routers.ErrPathNotFound.Error() {
-				options.ErrorHandler(c, err.Error(), http.StatusNotFound)
-				// in case the handler didn't internally call Abort, stop the chain
-				c.Abort()
-			} else if options != nil && options.ErrorHandler != nil {
-				options.ErrorHandler(c, err.Error(), http.StatusBadRequest)
-				// in case the handler didn't internally call Abort, stop the chain
-				c.Abort()
-			} else if err.Error() == routers.ErrPathNotFound.Error() {
-				// note: i am not sure if this is the best way to handle this
-				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			} else {
-				// note: i am not sure if this is the best way to handle this
-				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			}
+			handleValidationError(c, err, options, http.StatusBadRequest)
 		}
 		c.Next()
 	}
@@ -112,38 +73,14 @@ func OapiRequestValidatorWithOptions(swagger *openapi3.T, options *Options) gin.
 // ValidateRequestFromContext is called from the middleware above and actually does the work
 // of validating a request.
 func ValidateRequestFromContext(c *gin.Context, router routers.Router, options *Options) error {
-	req := c.Request
-	route, pathParams, err := router.FindRoute(req)
-
-	// We failed to find a matching route for the request.
+	validationInput, err := getRequestValidationInput(c.Request, router, options)
 	if err != nil {
-		switch e := err.(type) {
-		case *routers.RouteError:
-			// We've got a bad request, the path requested doesn't match
-			// either server, or path, or something.
-			return errors.New(e.Reason)
-		default:
-			// This should never happen today, but if our upstream code changes,
-			// we don't want to crash the server, so handle the unexpected error.
-			return fmt.Errorf("error validating route: %s", err.Error())
-		}
+		return fmt.Errorf("error getting request validation input from route: %w", err)
 	}
 
-	validationInput := &openapi3filter.RequestValidationInput{
-		Request:    req,
-		PathParams: pathParams,
-		Route:      route,
-	}
-
-	// Pass the gin context into the request validator, so that any callbacks
+	// Pass the gin context into the response validator, so that any callbacks
 	// which it invokes make it available.
-	requestContext := context.WithValue(context.Background(), GinContextKey, c) //nolint:staticcheck
-
-	if options != nil {
-		validationInput.Options = &options.Options
-		validationInput.ParamDecoder = options.ParamDecoder
-		requestContext = context.WithValue(requestContext, UserDataKey, options.UserData) //nolint:staticcheck
-	}
+	requestContext := getRequestContext(c, options)
 
 	err = openapi3filter.ValidateRequest(requestContext, validationInput)
 	if err != nil {
@@ -169,43 +106,4 @@ func ValidateRequestFromContext(c *gin.Context, router routers.Router, options *
 		}
 	}
 	return nil
-}
-
-// GetGinContext gets the echo context from within requests. It returns
-// nil if not found or wrong type.
-func GetGinContext(c context.Context) *gin.Context {
-	iface := c.Value(GinContextKey)
-	if iface == nil {
-		return nil
-	}
-	ginCtx, ok := iface.(*gin.Context)
-	if !ok {
-		return nil
-	}
-	return ginCtx
-}
-
-func GetUserData(c context.Context) interface{} {
-	return c.Value(UserDataKey)
-}
-
-// attempt to get the MultiErrorHandler from the options. If it is not set,
-// return a default handler
-func getMultiErrorHandlerFromOptions(options *Options) MultiErrorHandler {
-	if options == nil {
-		return defaultMultiErrorHandler
-	}
-
-	if options.MultiErrorHandler == nil {
-		return defaultMultiErrorHandler
-	}
-
-	return options.MultiErrorHandler
-}
-
-// defaultMultiErrorHandler returns a StatusBadRequest (400) and a list
-// of all of the errors. This method is called if there are no other
-// methods defined on the options.
-func defaultMultiErrorHandler(me openapi3.MultiError) error {
-	return fmt.Errorf("multiple errors encountered: %s", me)
 }
