@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/getkin/kin-openapi v0.124.0
-	github.com/gin-gonic/gin v1.10.0
+	github.com/gin-gonic/gin v1.10.1
 	github.com/stretchr/testify v1.9.0
 )
 
