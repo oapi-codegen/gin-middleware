@@ -1,0 +1,77 @@
+openapi: '3.0.0'
+info:
+  version: 1.0.0
+  title: TestServer
+servers:
+  - url: http://deepmap.ai/
+paths:
+  /resource:
+    get:
+      operationId: getResource
+      parameters:
+        - name: id
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: success
+          content:
+            application/json:
+              schema:
+                required:
+                  - name
+                  - id
+                properties:
+                  name:
+                    type: string
+                  id:
+                    type: integer
+        '404':
+          description: not found
+          content:
+            application/json:
+              schema:
+                required:
+                  - message
+                properties:
+                  message:
+                    type: string
+        '500':
+          description: internal server error
+          content:
+            application/json:
+              schema:
+                properties:
+                  message:
+                    type: string
+    post:
+      operationId: createResource
+      responses:
+        '201':
+          description: created
+          content:
+            application/json:
+              schema:
+                required:
+                  - name
+                  - id
+                properties:
+                  name:
+                    type: string
+                  id:
+                    type: integer
+        '504':
+          description: gateway timeout
+          content:
+            text/plain:
+              schema:
+                type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                name:
+                  type: string
