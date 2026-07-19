@@ -10,7 +10,7 @@ help:
 	@echo "    tidy         tidy go mod"
 
 $(GOBIN)/golangci-lint:
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(GOBIN) v2.8.0
+	curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(GOBIN) v2.12.2
 
 .PHONY: tools
 tools: $(GOBIN)/golangci-lint
@@ -30,3 +30,6 @@ test:
 tidy:
 	@echo "tidy..."
 	go mod tidy
+
+# the CI scripts require a rule by this name
+tidy-ci: tidy
