@@ -73,6 +73,16 @@ type Options struct {
 	MultiErrorHandler MultiErrorHandler
 	// SilenceServersWarning allows silencing a warning for https://github.com/deepmap/oapi-codegen/issues/882 that reports when an OpenAPI spec has `spec.Servers != nil`
 	SilenceServersWarning bool
+	// DiscardValidatedValue turns off openapi3filter.Options.KeepValidatedValue,
+	// which this middleware enables by default. With it enabled, the request body
+	// seen by handlers exposes the value that was validated through a
+	// ValidatedValue() method, so a handler (for example an oapi-codegen strict
+	// server) can bind that value instead of decoding the body a second time.
+	// Set this to drop the decoded value after validation, for instance to limit
+	// memory retention for very large request bodies.
+	//
+	// Options.Options.KeepValidatedValue is overridden by this setting.
+	DiscardValidatedValue bool
 }
 
 // OapiRequestValidatorWithOptions creates a validator from a swagger object, with validation options
@@ -140,9 +150,15 @@ func ValidateRequestFromContext(c *gin.Context, router routers.Router, options *
 	requestContext := context.WithValue(context.Background(), GinContextKey, c) //nolint:staticcheck
 
 	if options != nil {
-		validationInput.Options = &options.Options
+		// Copy the openapi3filter options so the caller's struct is not
+		// mutated when applying our KeepValidatedValue default.
+		filterOptions := options.Options
+		filterOptions.KeepValidatedValue = !options.DiscardValidatedValue
+		validationInput.Options = &filterOptions
 		validationInput.ParamDecoder = options.ParamDecoder
 		requestContext = context.WithValue(requestContext, UserDataKey, options.UserData) //nolint:staticcheck
+	} else {
+		validationInput.Options = &openapi3filter.Options{KeepValidatedValue: true}
 	}
 
 	err = openapi3filter.ValidateRequest(requestContext, validationInput)
