@@ -439,3 +439,101 @@ func TestOapiRequestValidatorWithOptionsMultiErrorAndCustomHandler(t *testing.T)
 		called = false
 	}
 }
+
+func TestOapiRequestValidatorKeepValidatedValue(t *testing.T) {
+	swagger, err := openapi3.NewLoader().LoadFromData(testSchema)
+	require.NoError(t, err, "Error initializing swagger")
+
+	type validatedValuer interface {
+		ValidatedValue() any
+	}
+
+	tests := []struct {
+		name          string
+		options       *Options
+		wantValidated bool
+	}{
+		{
+			name:          "nil options keep the validated value",
+			options:       nil,
+			wantValidated: true,
+		},
+		{
+			name:          "empty options keep the validated value",
+			options:       &Options{SilenceServersWarning: true},
+			wantValidated: true,
+		},
+		{
+			name: "DiscardValidatedValue drops the validated value",
+			options: &Options{
+				SilenceServersWarning: true,
+				DiscardValidatedValue: true,
+				// DiscardValidatedValue overrides the openapi3filter setting.
+				Options: openapi3filter.Options{KeepValidatedValue: true},
+			},
+			wantValidated: false,
+		},
+		{
+			name: "ExcludeRequestBody skips body validation",
+			options: &Options{
+				SilenceServersWarning: true,
+				Options:               openapi3filter.Options{ExcludeRequestBody: true},
+			},
+			wantValidated: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var originalFilterOptions openapi3filter.Options
+			if tt.options != nil {
+				originalFilterOptions = tt.options.Options
+			}
+
+			g := gin.New()
+			if tt.options == nil {
+				g.Use(OapiRequestValidator(swagger))
+			} else {
+				g.Use(OapiRequestValidatorWithOptions(swagger, tt.options))
+			}
+
+			called := false
+			var hasValidated bool
+			var validated any
+			var bodyBytes []byte
+			var bound map[string]any
+			g.POST("/resource", func(c *gin.Context) {
+				called = true
+				if vv, ok := c.Request.Body.(validatedValuer); ok {
+					hasValidated = true
+					validated = vv.ValidatedValue()
+				}
+				var readErr error
+				bodyBytes, readErr = io.ReadAll(c.Request.Body)
+				require.NoError(t, readErr)
+				require.NoError(t, json.Unmarshal(bodyBytes, &bound))
+				c.AbortWithStatus(http.StatusNoContent)
+			})
+
+			body := map[string]any{"name": "Marcin"}
+			rec := doPost(t, g, "http://deepmap.ai/resource", body)
+			assert.Equal(t, http.StatusNoContent, rec.Code)
+			require.True(t, called, "Handler should have been called")
+
+			wantBytes, err := json.Marshal(body)
+			require.NoError(t, err)
+			assert.Equal(t, string(wantBytes), string(bodyBytes), "body should still be readable with the original bytes")
+			assert.Equal(t, body, bound)
+
+			assert.Equal(t, tt.wantValidated, hasValidated)
+			if tt.wantValidated {
+				assert.Equal(t, map[string]any{"name": "Marcin"}, validated)
+			}
+
+			if tt.options != nil {
+				assert.Equal(t, originalFilterOptions.KeepValidatedValue, tt.options.Options.KeepValidatedValue,
+					"the caller's openapi3filter.Options must not be mutated")
+			}
+		})
+	}
+}
