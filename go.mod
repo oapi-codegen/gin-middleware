@@ -3,7 +3,7 @@ module github.com/oapi-codegen/gin-middleware
 go 1.25.0
 
 require (
-	github.com/getkin/kin-openapi v0.149.0
+	github.com/getkin/kin-openapi v0.152.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/stretchr/testify v1.11.1
 )
